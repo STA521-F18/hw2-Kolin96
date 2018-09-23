@@ -90,7 +90,7 @@ How many observations are used: 125, since the other 85 observations are deleted
 car::avPlots(mymodel)
 ```
 
-Transformations that are needed: The `Pop | others` plot shows that we need to transform `pop` to log scale, because all data points are now concentrated near 0.
+Transformations that are needed: The `Pop | others` plot shows that we need to transform `pop` to log scale, because all data points are now concentrated near 0. `PPgdp` should also be transformed since the current datapoints are also not evenly distributed.
 
 Influential localities for each term are all shown in the figures:
 
@@ -112,19 +112,25 @@ Note that Azerbaijan appears in all the lists.
 
 
 ```{r}
-UN3_nonnega = UN3
-UN3_nonnega['Change'] = UN3_nonnega['Change'] - min(UN3['Change'], na.rm=TRUE) + 1
-car::boxTidwell(ModernC ~  Pop, ~ PPgdp + Fertility + Change + Frate + Purban, data=UN3_nonnega, na.action = na.omit)
+Change_min = min(UN3["Change"], na.rm = TRUE) - 1e-4 # to avoid numerical issues about 0
+UN3_all = UN3 %>%
+  mutate(name = row.names(UN3)) %>%
+  na.omit() %>%
+  mutate(Change_trans = Change - Change_min)
+
+UN3_trans = UN3_all %>% select(c(ModernC, Change_trans, PPgdp, Frate, Pop, Fertility, Purban))
+car::boxTidwell(ModernC ~  Pop + PPgdp, ~ Fertility + Change_trans + Frate + Purban, data=UN3_trans)
 ```
 
-We first transform `Change` by subtracting its minimum value to make it nonnegative. Then, we transform `Pop`, the MLE of lambda computed by `car::boxTidwell` is 0.63309.
+We first transform `Change` by subtracting its minimum value to make it nonnegative, since subtractions would not harm our linear assumption. Then, we transform `Pop` and `PPgdp`, the MLE of lambda computed by `car::boxTidwell` are 0.40749 and -0.12921.
 
 7. Given the selected transformations of the predictors, select a transformation of the response using `MASS::boxcox` or `car::boxCox` and justify.
 
 
 ```{r}
-mymodel = lm(ModernC ~ ., data=UN3_nonnega)
-lambda = car::boxCox(mymodel)
+mymodel = lm(ModernC ~ ., data=UN3_trans)
+trials = car::boxCox(mymodel)
+lambda = trials$x[trials$y == max(trials$y)]
 ```
 
 By outputing car::boxCox(mymodel), we may find the best lambda is around 0.7879.
@@ -132,14 +138,19 @@ By outputing car::boxCox(mymodel), we may find the best lambda is around 0.7879.
 8.  Fit the regression using the transformed variables.  Provide residual plots and added variables plots and comment.  If you feel that you need additional transformations of either the response or predictors, repeat any steps until you feel satisfied.
 
 ```{r}
-UN3_nonnega = UN3_nonnega %>% mutate(logPop = log(Pop))
-mymodel = lm(ModernC ~ PPgdp + Fertility + Change + Frate + Purban + logPop, data=UN3_nonnega)
+UN3_all = UN3_all %>%
+  mutate(Pop_log = log(Pop)) %>%
+  mutate(PPgdp_log = log(PPgdp))
+
+UN3_trans = UN3_all %>% select(c(ModernC, Change_trans, PPgdp_log, Frate, Pop_log, Fertility, Purban))
+
+mymodel = lm(ModernC ~ ., data=UN3_trans)
 summary(mymodel)
 plot(mymodel)
 car::avPlots(mymodel)
 ```
 
-We also applies log transformation to `Pop`. The residual plots show that residuals are very small (close to mean 0) and independent to fitted values. The Cook's distance are all very small. In the added variable plot, the `logPop` plot is much more balanced than the original `Pop` plot. The new model works better than our previous model.
+We apply log transformation to `Pop` and `PPgdp`. The residual plots show that residuals are very small (close to mean 0) and independent to fitted values. The Cook's distance are all very small. In the added variable plot, the `logPop` plot is much more balanced than the original `Pop` plot. The new model works better than our previous model.
 
 9. Start by finding the best transformation of the response and then find transformations of the predictors.  Do you end up with a different model than in 8?
 
@@ -157,7 +168,7 @@ abs.ti = abs(rstudent(mymodel))
 pval= 2*(1- pt(max(abs.ti), mymodel$df - 1))
 ```
 
-We can use student t test with Bonferroni Correction to determine whether there are outliers. The p-value for the observation with largest studentized residual is much lower than 0.05/125, so we claim that there is no outlier. There should be also no influential points, since in the former plots, all Cook's distances are low.
+We can use student t test with Bonferroni Correction to determine whether there are outliers. The p-value for the observation that has the largest studentized residual is >0.0024, so all p-values should be much greater than 0.05/125, so we claim that there is no outlier. There should be also no influential points, since in the former plots, all Cook's distances are low.
 
 ## Summary of Results
 
@@ -165,9 +176,29 @@ We can use student t test with Bonferroni Correction to determine whether there 
 
 
 ```{r}
-
+df = data.frame(cbind(coefficients(mymodel), confint(mymodel)))
+kable(df, col.names = c("coefficients", "2.5%", "97.5%"), digits = 4)
 ```
 
+Our model: `ModernC` = -1.3773 + 4.9930 `Change_trans` + 5.5073 log(`PPgdp`) + 0.1894 `Frate` + 1.4721 log(`Pop`) - 9.6759 `Fertility` - 0.0708 `Purban` + $\epsilon$
+
+Note: `Change_trans` is computed by subtracting `Change` by Change_min = -1.1001, which keeps the linearality of the equation.
+
+Interpretations:
+
+`(Intercept)`: The predicted value when all parameters approach 0. The confidence interval of the intercept is large, so a considerable noise may exist.
+
+`Change`: Whenever `Change` increases, `ModernC` is expected to increase 4.9930 times the amount.
+
+`PPgdp`: 10% increase in `PPgdp` implies a 5.5073 * log(1.1) = 0.5249 increase to `ModernC`.
+
+`Frate`: Whenever `Frate` increases, `ModernC` is expected to increase 0.1894 times the amount.
+
+`Pop`: 10% increase in `Pop` implies a 1.4721 * log(1.1) = 0.1403 increase to `ModernC`.
+
+`Fertility`: Whenever `Fertility` increases, `ModernC` is expected to decrease 9.6759 times the amount.
+
+`Purban`: Whenever `Purban` increases, `ModernC` is expected to decrease 0.0708 times the amount.
 
 12. Provide a paragraph summarizing your final model  and findings suitable for the US envoy to the UN after adjusting for outliers or influential points.   You should provide a justification for any case deletions in your final model
 
@@ -176,11 +207,52 @@ We can use student t test with Bonferroni Correction to determine whether there 
 
 ```
 
+Our model: `ModernC` = -1.3773 + 4.9930 (`Change` + 1.1001) + 5.5073 log(`PPgdp`) + 0.1894 `Frate` + 1.4721 log(`Pop`) - 9.6759 `Fertility` - 0.0708 `Purban` + $\epsilon$
+
+In our study, we delete 85 observations with missing values, and our analysis are based on the remaining 125 UN member countries or regions.
+
+When we talk about "the percent of unmarried women using a modern method of contraception" (cited from the R documentation for `UN3`), we find that many factors are correlated with it. Specificallly, greater annual population growth rate, higher GDP per capita, higher percent of females over 15 econnomically active and larger populations would all indicate more use of modern contraceptions among unmarried women, whereas increasing fertility or urban population percentage both imply a decline in the use of modern contraception. Morever, the population and GDP should be measured in log scale, since the their propotions between different countries are always exponential. 
+
+There are no significant outliers in the model, but we notice that the model is less accurate for China and Indea because of their huge population. Also, the model might work relatively poorly for countries like Thailand, Poland and Azerbaijan, for which the reasons are to be examined by sociologists. 
 
 ## Methodology
 
     
 13. Prove that the intercept in the added variable scatter plot will always be zero.  _Hint:  use the fact that if $H$ is the project matrix which contains a column of ones, then $1_n^T (I - H) = 0$.  Use this to show that the sample mean of residuals will always be zero if there is an intercept._
 
+Proof: For the added variable scatter plot, we are actually applying a simple linear regression between two regression residuals: $\hat{\textbf{e}}_{(1)}=(\textbf{I}_n-\textbf{H})\textbf{Y}$ and $\hat{\textbf{e}}_{1|others}=(\textbf{I}_n-\textbf{H})\textbf{X}_1$, where we suppose we are trying to add the variable $x_1$. Note that the hat matrices in the two expressions are the same, because both regressions are based on all predictors except $x_1$. The new regression model is
+$$
+\hat{\textbf{e}}_{(1)}=\beta_0\mathbf{1}_n+\beta_1\hat{\textbf{e}}_{1|others} +\epsilon
+$$
+A closed-form solution would be
+$$
+\hat{\beta}_1=(\hat{\textbf{e}}_{1|others}^T\hat{\textbf{e}}_{1|others})^{-1}\hat{\textbf{e}}_{1|others}^T\hat{\textbf{e}}_{(1)}=(\textbf{X}_1^T(\textbf{I}_n-\textbf{H})\textbf{X}_1)^{-1}\textbf{X}_1^T(\textbf{I}_n-\textbf{H})\textbf{Y},
+$$ 
+in which we used $=(\textbf{I}_n-\textbf{H})^T(\textbf{I}_n-\textbf{H})=\textbf{I}_n-\textbf{H}$. Therefore, we have
+$$
+\hat\beta_0\mathbf{1}_n = (\textbf{X}_1^T(\textbf{I}_n-\textbf{H})\textbf{X}_1)^{-1}\textbf{X}_1^T(\textbf{I}_n-\textbf{H})\textbf{Y}(\textbf{I}_n-\textbf{H})\textbf{X}_1-(\textbf{I}_n-\textbf{H})\textbf{Y}
+$$
+Multiplying (left) each side by $\textbf{X}_1^T$, we obtain
+$$
+\begin{aligned}
+\hat\beta_0\textbf{X}_1^T\mathbf{1}_n &=\textbf{X}_1^T\left (\textbf{X}_1^T(\textbf{I}_n-\textbf{H})\textbf{X}_1\right)^{-1}\left(\textbf{X}_1^T(\textbf{I}_n-\textbf{H})\textbf{Y}\right)(\textbf{I}_n-\textbf{H})\textbf{X}_1-\textbf{X}_1^T(\textbf{I}_n-\textbf{H})\textbf{Y}\\
+&=\left (\textbf{X}_1^T(\textbf{I}_n-\textbf{H})\textbf{X}_1\right)^{-1}\left(\textbf{X}_1^T(\textbf{I}_n-\textbf{H})\textbf{Y}\right)\textbf{X}_1^T(\textbf{I}_n-\textbf{H})\textbf{X}_1-\textbf{X}_1^T(\textbf{I}_n-\textbf{H})\textbf{Y}\\
+&=\textbf{X}_1^T(\textbf{I}_n-\textbf{H})\textbf{Y}-\textbf{X}_1^T(\textbf{I}_n-\textbf{H})\textbf{Y}\\
+&=0,
+\end{aligned}
+$$
+in which we note that $\textbf{X}_1^T(\textbf{I}_n-\textbf{H})\textbf{X}_1$ and $\textbf{X}_1^T(\textbf{I}_n-\textbf{H})\textbf{Y}$ are scalars. Consequently, since $\textbf{X}_1^T\mathbf{1}_n=\sum_{i=1}^nX_{i,1}\neq0$, we could state that $\hat\beta_0=0$.
 
 14. For multiple regression with more than 2 predictors, say a full model given by `Y ~ X1 + X2 + ... Xp`   we create the added variable plot for variable `j` by regressing `Y` on all of the `X`'s except `Xj` to form `e_Y` and then regressing `Xj` on all of the other X's to form `e_X`.  Confirm that the slope in a manually constructed added variable plot for one of the predictors  in Ex. 10 is the same as the estimate from your model. 
+
+```{r}
+lm_x = lm(Fertility ~ Change_trans + PPgdp_log + Frate + Pop_log + Purban, data = UN3_trans)
+lm_y = lm(ModernC ~ Change_trans + PPgdp_log + Frate + Pop_log + Purban, data = UN3_trans)
+av_plot_data = data.frame(cbind(residuals(lm_x), residuals(lm_y)))
+colnames(av_plot_data) = c("e_x", "e_y")
+
+lm_avplot = lm(e_y ~ e_x, data = av_plot_data)
+summary(lm_avplot)
+```
+
+We manually constrcted an avplot for `Fertility`. The estimated slope is -9.676, which is the same as its coefficient.
